@@ -36,9 +36,9 @@ Rangefinder rangefinder(11, 4);
 
 // Motor Parameters
 Romi32U4Motors motors;
-const int16_t MAX_SPEED = 420;
-const int16_t MIN_SPEED = 50;
-const uint16_t BASE_SPEED = 300;
+static const int16_t MAX_SPEED = 420;
+static const int16_t MIN_SPEED = 50;
+static const uint16_t BASE_SPEED = 300;
 
 // BUTTORN PARAMETERS
 Romi32U4ButtonA buttonA;
@@ -170,7 +170,7 @@ void handleTurnEvent(Directions route[], int n)
       InterCount++;
       break;
     case 'E':
-      chassis.turnFor(180, 360, true);
+      chassis.turnFor(-180, 360, true);
       motors.setSpeeds(0, 0);
       InterCount = 0;
       RouteCount++;
@@ -190,7 +190,6 @@ void handleTurnEvent(Directions route[], int n)
 // Eventually change this into array of structures
 void checkIntersectionEvent(int left, int right)
 {
-
   if ((left > 650) && (right > 650))
   {
     chassis.idle();
@@ -406,26 +405,35 @@ void inline SpeedIncrementFUNC(int16_t *sIncrement, int16_t *samples, int16_t *s
   int16_t tempS = *samples;
   int16_t tempS1 = *samples1;
   qtr.read(sensorValues);
+  for (uint8_t i = 0; i < SensorCount; i++)
+  {
+    Serial.print(sensorValues[i]);
+    Serial.print('\t');
+  }
 
   if ((sensorValues[2] > (sensorValues[0] + sensorValues[1])) || (sensorValues[3] > (sensorValues[4] + sensorValues[5])))
   {
     tempS++;
-    if (tempS > 10)
+    tempS1 = 0;
+    if (tempS > 8)
     {
       tempSI += 1;
       tempS = 0;
     }
-    tempS1 = 0;
   }
   else
   {
     tempS1++;
-    if (tempS1 > 1)
+    tempS = 0;
+    if (tempS1 > 4)
     {
       tempSI--;
+      if (BASE_SPEED + tempS1 < MIN_SPEED)
+      {
+        tempS1 = MIN_SPEED - BASE_SPEED;
+      }
       tempS1 = 0;
     }
-    tempS = 0;
   }
 
   *sIncrement = tempSI;
@@ -469,17 +477,18 @@ void inline lineFollowingHandler(void)
 
   Serial.print("Turn Effort: ");
   Serial.print(turnEffort);
-  Serial.print("\t");
-
-  Serial.print("M1: ");
-  Serial.print(m1Speed);
-  Serial.print("\t");
-
-  Serial.print("M2: ");
-  Serial.print(m1Speed);
-  Serial.println("\t");
+  Serial.print("\t\n");
 
   motorSpeedLimitBound(&m1Speed, &m2Speed);
+  // Serial.print("M1: ");
+  // Serial.print(m1Speed);
+  // Serial.print("\t");
+
+  // Serial.print("M2: ");
+  // Serial.print(m1Speed);
+  // Serial.println("\t");
+
+  // motorSpeedLimitBound(&m1Speed, &m2Speed);
 
   motors.setSpeeds(m1Speed, m2Speed);
 }
