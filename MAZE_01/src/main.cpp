@@ -5,6 +5,15 @@
 #include <Rangefinder.h>
 #include <servo32u4.h>
 
+#define DEBUG 1
+#if DEBUG == 1
+#define debug(x) Serial.print(x)
+#define debugln(x) Serial.println(x)
+#else
+#define debug(x)
+#define debugln(x)
+#endif
+
 // Control Delivery Sequence
 #define r1 'a'
 #define r2 'a'
@@ -13,8 +22,8 @@
 // Amount of Routes
 #define numDest 1
 
-#define k_p 0.09
-#define k_d 0.225
+#define k_p 0.06
+#define k_d 0.150
 #define k_i 0.000
 
 // Values Required For PID Calculations
@@ -46,6 +55,9 @@ Servo32U4 servo;
 static const uint16_t SERVO_DOWN = 500;
 static const uint16_t SERVO_UP = 5000;
 
+// SoftwareSerial s(14, 11); // software serial #1: RX = digital pin 3, TX = digital pin 2
+static const int MAX_MESSAGE_LENGTH = 8;
+
 enum ROBOT_STATE
 {
   ROBOT_UNCALIBRATED,
@@ -65,14 +77,21 @@ typedef struct
   uint16_t height;
 } Directions;
 
-Directions ROUTE[3];
+static Directions ROUTE[numDest];
 
 // add other nodes
-Directions TestRoute = {'T', {'R', 'L', 'L', 'S', 'L', 'S', 'T', 'E'}, 0};
+Directions TestRoute = {'T', {'T', 'R', 'L', 'L', 'S', 'L', 'S', 'T', 'E'}, 0};
 
 // ROUTES
 Directions ARoute = {'A', {'P', 'R', 'R', 'D', 'L', 'L', 'T', 'E'}, 0};
-Directions BRoute = {'B', {'T', 'R', 'S', 'T', 'S', 'L', 'T', 'E'}, 0};
+Directions BRoute = {'B', {'P', 'R', 'S', 'D', 'S', 'L', 'T', 'E'}, 0};
+Directions CRoute = {'C', {'P', 'R', 'L', 'R', 'D', 'L', 'R', 'L', 'T', 'E'}, 0};
+Directions DRoute = {'D', {'P', 'R', 'L', 'S', 'D', 'S', 'R', 'L', 'T', 'E'}, 0};
+
+// Directions ARoute = {'A', {'T', 'R', 'R', 'T', 'L', 'L', 'T', 'E'}, 0};
+// Directions BRoute = {'B', {'T', 'R', 'S', 'T', 'S', 'L', 'T', 'E'}, 0};
+// Directions CRoute = {'C', {'T', 'R', 'L', 'R', 'T', 'L', 'R', 'L', 'T', 'E'}, 0};
+// Directions DRoute = {'D', {'T', 'R', 'L', 'S', 'T', 'S', 'R', 'L', 'T', 'E'}, 0};
 
 void calibration();
 void checkIntersectionEvent(int left, int right);
@@ -94,22 +113,22 @@ void drive(float distance, float speed)
 
 void handleDelivery()
 {
+  servo.writeMicroseconds(SERVO_DOWN);
   chassis.driveFor(-3, 90, true);
   servo.writeMicroseconds(SERVO_DOWN);
   chassis.driveFor(-3, 90, true);
-  servo.writeMicroseconds(SERVO_UP);
-  turn(180, 360);
+  turn(185, 360);
 }
 
 void handlePickUP(float distance)
 {
-  Serial.print(distance);
-  Serial.print(" cm\n");
+  debugln(distance);
+  debugln(" cm\n");
   if (distance < 3)
   {
     servo.writeMicroseconds(SERVO_UP);
     chassis.driveFor(-10, 90, true);
-    turn(180, 360);
+    turn(180, 180);
   }
   else
   {
@@ -124,12 +143,12 @@ void handleTurnEvent(Directions route[], int n)
   static uint16_t InterCount = 0;
   static uint8_t RouteCount = 0;
 
-  Serial.println("ROBOT STATE: TURNING");
-  Serial.print("\nInterCount: ");
-  Serial.println(InterCount);
+  debugln("ROBOT STATE: TURNING");
+  debugln("\nInterCount: ");
+  debugln(InterCount);
   if (RouteCount < n)
   {
-    Serial.println(route[RouteCount].turnSequence[InterCount]);
+    debugln(route[RouteCount].turnSequence[InterCount]);
     switch (route[RouteCount].turnSequence[InterCount])
     {
     case 'T': // Turn around
@@ -141,27 +160,27 @@ void handleTurnEvent(Directions route[], int n)
       InterCount++;
       break;
     case 'R': // Turn right
-      chassis.driveFor(6, 90, true);
-      turn(-95, 360);
+      chassis.driveFor(5.5, 90, true);
+      turn(-92, 180);
       InterCount++;
       break;
     case 'L': // Turn left
-      chassis.driveFor(6, 90, true);
-      turn(95, 360);
+      chassis.driveFor(5.5, 90, true);
+      turn(92, 180);
       InterCount++;
       break;
     case 'D': // drop off sequence
-      // Call function to handle deliveries for each individual track
-      // dropOffSequence(&route[RouteCount]);
+      // Transition to a different State temporarily
       robotState = ROBOT_DELIVERY;
       InterCount++;
       break;
     case 'P': // pick up off sequence
-      // Call function to handle Package Pick Up
+      // Transition to a different State temporarily
       robotState = ROBOT_PICKUP;
       InterCount++;
       break;
     case 'E':
+      servo.writeMicroseconds(SERVO_DOWN);
       chassis.turnFor(-180, 360, true);
       chassis.driveFor(1, 90, true);
       motors.setSpeeds(0, 0);
@@ -171,26 +190,25 @@ void handleTurnEvent(Directions route[], int n)
         robotState = ROBOT_FOLLOW;
       else
       {
-        // RouteCount = 0;
+        RouteCount = 0;
         robotState = ROBOT_ORDERS;
       }
       break;
-
     default:
       break;
     }
   }
-  else
-  {
-    robotState = ROBOT_ORDERS;
-    RouteCount = 0;
-  }
+  // else
+  // {
+  //   robotState = ROBOT_ORDERS;
+  //   RouteCount = 0;
+  // }
 }
 
 // Eventually change this into array of structures
 void checkIntersectionEvent(int left, int right)
 {
-  if ((left > 350) && (right > 350))
+  if ((left > 1500) && (right > 1500))
   {
     chassis.idle();
     robotState = ROBOT_TURNING;
@@ -206,15 +224,23 @@ void pathSequence(char Des[], int n)
     {
     case 't':
       ROUTE[i] = TestRoute;
-      Serial.println("ROUTE A WAS MARKED");
+      debugln("ROUTE A WAS MARKED");
       break;
     case 'a':
       ROUTE[i] = ARoute;
-      Serial.println("ROUTE A WAS MARKED");
+      debugln("ROUTE A WAS MARKED");
       break;
     case 'b':
       ROUTE[i] = BRoute;
-      Serial.println("ROUTE B WAS MARKED");
+      debugln("ROUTE B WAS MARKED");
+      break;
+    case 'c':
+      ROUTE[i] = CRoute;
+      debugln("ROUTE C WAS MARKED");
+      break;
+    case 'd':
+      ROUTE[i] = DRoute;
+      debugln("ROUTE D WAS MARKED");
       break;
     // Add other cases
     default:
@@ -222,10 +248,9 @@ void pathSequence(char Des[], int n)
     }
   }
 }
-
 void handleButton(int16_t keyPress)
 {
-  Serial.println("Key: " + String(keyPress));
+  debugln("Key: " + String(keyPress));
   static char route[3] = {r1, r2, r3};
 
   if (robotState == ROBOT_CALIBRATED || robotState == ROBOT_ORDERS)
@@ -233,16 +258,16 @@ void handleButton(int16_t keyPress)
     switch (keyPress)
     {
     case 0:
-      Serial.println("ROBOT STATE: ROBOT_FOLLOW");
+      debugln("ROBOT STATE: ROBOT_FOLLOW");
       for (int i = 0; i < 3; i++)
-        Serial.println(route[i]);
+        debugln(route[i]);
 
       pathSequence(route, numDest);
       robotState = ROBOT_FOLLOW;
 
       break;
     case 1:
-      Serial.println("SELECTED ROUTES");
+      debugln("SELECTED ROUTES");
       break;
     default:
       break;
@@ -250,10 +275,78 @@ void handleButton(int16_t keyPress)
   }
 }
 
+uint8_t pathSequenceUART(char Des[])
+{
+  int n = Des[0] - '0';
+  if (n > numDest)
+    n = numDest;
+
+  for (int i = 1, j = 0; i < n + 1; i++, j++)
+  {
+    switch (Des[i])
+    {
+    case 't':
+      ROUTE[j] = TestRoute;
+      debugln("ROUTE T WAS MARKED");
+      break;
+    case 'a':
+      ROUTE[j] = ARoute;
+      debugln("ROUTE A WAS MARKED");
+      break;
+    case 'b':
+      ROUTE[j] = BRoute;
+      debugln("ROUTE B WAS MARKED");
+      break;
+    case 'c':
+      ROUTE[j] = CRoute;
+      debugln("ROUTE C WAS MARKED");
+      break;
+    case 'd':
+      ROUTE[j] = DRoute;
+      debugln("ROUTE D WAS MARKED");
+      break;
+    // Add other cases
+    default:
+      break;
+    }
+  }
+  return n;
+}
+
+uint8_t handleUARTCOM(void)
+{
+  uint8_t routeCount;
+  while (Serial1.available() > 0)
+  {
+    static char MESSAGE[MAX_MESSAGE_LENGTH];
+    static uint8_t pos = 0;
+
+    char inByte = Serial1.read();
+    if (inByte != '\n' && (pos < MAX_MESSAGE_LENGTH - 1))
+    {
+      MESSAGE[pos] = inByte;
+      pos++;
+    }
+    else
+    {
+      MESSAGE[pos] = '\0';
+      pos = 0;
+      Serial.println(MESSAGE);
+      routeCount = pathSequenceUART(MESSAGE);
+      robotState = ROBOT_FOLLOW;
+    }
+  }
+
+  return routeCount;
+}
+
 void setup()
 {
   // put your setup code here, to run once:
   Serial.begin(115200);
+  Serial1.begin(9600);
+
+  // s.begin(9600);
 
   // Initialize Chasis
   chassis.init();
@@ -277,18 +370,25 @@ void setup()
 void loop()
 {
   static uint16_t cPressedCount = 0b0;
+  uint8_t routeCount = numDest;
   // int16_t keyPress = decoder.getKeyCode();
   if (buttonA.getSingleDebouncedPress())
   {
-    Serial.println("ROBOT STATE: UNCALIBRATED");
+    debugln("ROBOT STATE: UNCALIBRATED");
     ledRed(1);
     calibration();
   }
   else if (buttonB.getSingleDebouncedPress())
   {
+    servo.writeMicroseconds(SERVO_DOWN);
     cPressedCount ^= 0b1;
     handleButton(cPressedCount);
   }
+  else if ((robotState == ROBOT_CALIBRATED || robotState == ROBOT_ORDERS) && Serial1.available())
+  {
+    routeCount = handleUARTCOM();
+  }
+
   static float distance;
   switch (robotState)
   {
@@ -297,7 +397,7 @@ void loop()
     break;
   case ROBOT_TURNING:
     chassis.idle();
-    handleTurnEvent(ROUTE, numDest); // Array that stores destinations and number of destinations
+    handleTurnEvent(ROUTE, routeCount); // Array that stores destinations and number of destinations
     break;
   case ROBOT_ORDERS:
     chassis.idle();
@@ -316,7 +416,7 @@ void loop()
 
 void calibration()
 {
-  Serial.println("CALIBRATING: Please Wait...");
+  debugln("CALIBRATING: Please Wait...");
   for (uint16_t i = 0; i < 200; i++)
   {
     qtr.calibrate();
@@ -324,19 +424,19 @@ void calibration()
 
   for (uint8_t i = 0; i < SensorCount; i++)
   {
-    Serial.print(qtr.calibrationOn.minimum[i]);
-    Serial.print(' ');
+    debug(qtr.calibrationOn.minimum[i]);
+    debug(' ');
   }
-  Serial.println();
+  debugln();
 
   // print the calibration maximum values measured when emitters were on
   for (uint8_t i = 0; i < SensorCount; i++)
   {
-    Serial.print(qtr.calibrationOn.maximum[i]);
-    Serial.print(' ');
+    debug(qtr.calibrationOn.maximum[i]);
+    debug(' ');
   }
   robotState = ROBOT_CALIBRATED;
-  Serial.println("\nROBOT STATE: CALIBRATED");
+  debugln("\nROBOT STATE: CALIBRATED");
   ledRed(0);
   ledGreen(1);
 }
@@ -360,10 +460,12 @@ void inline SpeedIncrementFUNC(int16_t *sIncrement, int16_t *samples, int16_t *s
   int16_t tempS = *samples;
   int16_t tempS1 = *samples1;
   qtr.read(sensorValues);
+
+  checkIntersectionEvent((sensorValues[0] + sensorValues[1] + sensorValues[2]), (sensorValues[3] + sensorValues[4] + sensorValues[5]));
   for (uint8_t i = 0; i < SensorCount; i++)
   {
-    Serial.print(sensorValues[i]);
-    Serial.print('\t');
+    debug(sensorValues[i]);
+    debug('\t');
   }
 
   if ((sensorValues[2] > (sensorValues[0] + sensorValues[1])) || (sensorValues[3] > (sensorValues[4] + sensorValues[5])))
@@ -394,7 +496,6 @@ void inline SpeedIncrementFUNC(int16_t *sIncrement, int16_t *samples, int16_t *s
   *sIncrement = tempSI;
   *samples = tempS;
   *samples1 = tempS1;
-  checkIntersectionEvent(sensorValues[0], sensorValues[5]);
 }
 void inline motorSpeedLimitBound(int16_t *m1, int16_t *m2)
 {
@@ -426,22 +527,22 @@ void inline lineFollowingHandler(void)
   m1Speed = (BASE_SPEED + sIncrement) - turnEffort;
   m2Speed = (BASE_SPEED + sIncrement) + turnEffort;
 
-  Serial.print("Error: ");
-  Serial.print(lastError);
-  Serial.print("\t");
+  debug("Error: ");
+  debug(lastError);
+  debug("\t");
 
-  Serial.print("Turn Effort: ");
-  Serial.print(turnEffort);
-  Serial.print("\t");
+  debug("Turn Effort: ");
+  debug(turnEffort);
+  debug("\t");
 
   motorSpeedLimitBound(&m1Speed, &m2Speed);
-  // Serial.print("M1: ");
-  Serial.print(m1Speed);
-  Serial.print("\t");
+  // debug("M1: ");
+  debug(m1Speed);
+  debug("\t");
 
-  Serial.print("M2: ");
-  Serial.print(m1Speed);
-  Serial.println("\t");
+  debug("M2: ");
+  debug(m1Speed);
+  debugln("\t");
 
   // motorSpeedLimitBound(&m1Speed, &m2Speed);
 
