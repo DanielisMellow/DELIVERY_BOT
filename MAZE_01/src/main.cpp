@@ -15,16 +15,26 @@
 #endif
 
 // Control Delivery Sequence
-#define r1 'a'
-#define r2 'a'
-#define r3 'a'
+#define r1 't'
+#define r2 't'
+#define r3 't'
 
 // Amount of Routes
 #define numDest 1
 
-#define k_p 0.06
-#define k_d 0.150
-#define k_i 0.000
+#define k_p 0.08
+#define k_d 0.375
+#define k_i 0.0001
+
+#define InterSens 0.45
+#define CenterSens 0.38
+
+// Value to detect intersections at home
+//#define InterSens 0.54
+
+// Value to detect intersections at school
+// #define InterSens 0.45
+// #define CenterSens 0.38
 
 // Values Required For PID Calculations
 const float kp = k_p, kd = k_d, ki = k_i;
@@ -32,7 +42,12 @@ const float kp = k_p, kd = k_d, ki = k_i;
 // SETUP QTR SENSOR
 QTRSensors qtr;
 const uint8_t SensorCount = 6;
+// const uint8_t SensorCount = 4;
 uint16_t sensorValues[SensorCount];
+uint16_t MEAN_RIGHT;
+uint16_t MEAN_LEFT;
+uint16_t CENTER_RIGHT;
+uint16_t CENTER_LEFT;
 
 // Chasis Functionality
 Chassis chassis(7, 1440, 14.7);
@@ -43,8 +58,8 @@ Rangefinder rangefinder(11, 4);
 // Motor Parameters
 Romi32U4Motors motors;
 static const int16_t MAX_SPEED = 420;
-static const int16_t MIN_SPEED = 150;
-static const uint16_t BASE_SPEED = 250;
+static const int16_t MIN_SPEED = 1;
+static const uint16_t BASE_SPEED = 300;
 
 // BUTTORN PARAMETERS
 Romi32U4ButtonA buttonA;
@@ -52,11 +67,11 @@ Romi32U4ButtonB buttonB;
 
 // SERVO
 Servo32U4 servo;
-static const uint16_t SERVO_DOWN = 500;
-static const uint16_t SERVO_UP = 5000;
+static const int16_t SERVO_DOWN = 1900;
+static const int16_t SERVO_UP = 500;
 
-// SoftwareSerial s(14, 11); // software serial #1: RX = digital pin 3, TX = digital pin 2
-static const int MAX_MESSAGE_LENGTH = 8;
+static const int MAX_MESSAGE_LENGTH = 16;
+static uint8_t routeCount = numDest;
 
 enum ROBOT_STATE
 {
@@ -73,7 +88,7 @@ static ROBOT_STATE robotState = ROBOT_UNCALIBRATED;
 typedef struct
 {
   char routeName;        // A B C D E F G H
-  char turnSequence[12]; // How the robot handles intersection events
+  char turnSequence[16]; // How the robot handles intersection events
   uint16_t height;
 } Directions;
 
@@ -87,23 +102,24 @@ Directions ARoute = {'A', {'P', 'R', 'R', 'D', 'L', 'L', 'T', 'E'}, 0};
 Directions BRoute = {'B', {'P', 'R', 'S', 'D', 'S', 'L', 'T', 'E'}, 0};
 Directions CRoute = {'C', {'P', 'R', 'L', 'R', 'D', 'L', 'R', 'L', 'T', 'E'}, 0};
 Directions DRoute = {'D', {'P', 'R', 'L', 'S', 'D', 'S', 'R', 'L', 'T', 'E'}, 0};
-
-// Directions ARoute = {'A', {'T', 'R', 'R', 'T', 'L', 'L', 'T', 'E'}, 0};
-// Directions BRoute = {'B', {'T', 'R', 'S', 'T', 'S', 'L', 'T', 'E'}, 0};
-// Directions CRoute = {'C', {'T', 'R', 'L', 'R', 'T', 'L', 'R', 'L', 'T', 'E'}, 0};
-// Directions DRoute = {'D', {'T', 'R', 'L', 'S', 'T', 'S', 'R', 'L', 'T', 'E'}, 0};
+Directions ERoute = {'E', {'P', 'R', 'L', 'L', 'R', 'D', 'L', 'R', 'R', 'L', 'T', 'E'}, 0};
+Directions FRoute = {'F', {'P', 'R', 'L', 'L', 'L', 'D', 'R', 'R', 'R', 'L', 'T', 'E'}, 0};
+Directions GRoute = {'G', {'P', 'R', 'L', 'L', 'S', 'R', 'D', 'L', 'S', 'R', 'R', 'L', 'T', 'E'}, 0};
+Directions HRoute = {'H', {'P', 'R', 'L', 'L', 'S', 'S', 'D', 'S', 'S', 'R', 'R', 'L', 'T', 'E'}, 0};
+Directions IRoute = {'I', {'P', 'L', 'D', 'R', 'T', 'E'}, 0};
 
 void calibration();
 void checkIntersectionEvent(int left, int right);
 void inline TurnEffort(int16_t *lastError, float *turnEffort);
 void inline SpeedIncrementFUNC(int16_t *sIncrement, int16_t *samples, int16_t *samples1);
 void inline motorSpeedLimitBound(int *m1, int *m2);
-void inline lineFollowingHandler(void);
+void inline lineFollowingHandlerV1(uint16_t baseSpeed, bool acceleration, float distance);
 
 void turn(float ang, float speed)
 {
   chassis.turnFor(ang, speed, true);
   robotState = ROBOT_FOLLOW;
+  // Serial1.println(robotState);
 }
 void drive(float distance, float speed)
 {
@@ -111,30 +127,218 @@ void drive(float distance, float speed)
   robotState = ROBOT_FOLLOW;
 }
 
-void handleDelivery()
+void moveArmUp()
 {
-  servo.writeMicroseconds(SERVO_DOWN);
-  chassis.driveFor(-3, 90, true);
-  servo.writeMicroseconds(SERVO_DOWN);
-  chassis.driveFor(-3, 90, true);
-  turn(185, 360);
+  for (int x = SERVO_DOWN; x > SERVO_UP; x -= 5)
+  {
+    servo.writeMicroseconds(x);
+    delay(5);
+  }
+}
+
+void moveArmDown()
+{
+  for (int x = SERVO_UP; x < SERVO_DOWN; x += 5)
+  {
+    servo.writeMicroseconds(x);
+    delay(5);
+  }
+}
+
+int handleDropOff(int height)
+{
+
+  int Microseconds = 0;
+  switch (height)
+  {
+  case 0:
+    // Case for 0 blocks
+    for (int x = SERVO_UP; x < SERVO_DOWN; x++)
+    {
+      Microseconds = x;
+      servo.writeMicroseconds(Microseconds);
+      delay(5);
+    }
+    break;
+  case 1:
+    // Case for 1 blocks
+    for (int x = SERVO_UP; x < 1580; x++)
+    {
+
+      Microseconds = x;
+      servo.writeMicroseconds(Microseconds);
+      delay(5);
+    }
+    break;
+  case 2:
+    // Case for 2 Blocks
+    for (int x = SERVO_UP; x < 1300; x++)
+    {
+      Microseconds = x;
+      servo.writeMicroseconds(Microseconds);
+      delay(5);
+    }
+    break;
+
+  default:
+    for (int x = SERVO_UP; x < SERVO_DOWN; x++)
+    {
+      Microseconds = x;
+      servo.writeMicroseconds(Microseconds);
+      delay(5);
+    }
+    break;
+  }
+
+  return Microseconds;
+}
+
+void remainderDown(int microseconds)
+{
+  for (int x = microseconds; x < SERVO_DOWN; x += 5)
+  {
+    servo.writeMicroseconds(x);
+    delay(5);
+  }
+}
+
+void handleDelivery(int height)
+{
+  debugln(height);
+  chassis.driveFor(-2, 60, true);
+  int ms = handleDropOff(height);
+  Serial1.println(robotState);
+  delay(1000);
+  chassis.driveFor(-2, 90, true);
+  turn(180, 360);
+  remainderDown(ms);
 }
 
 void handlePickUP(float distance)
 {
   debugln(distance);
   debugln(" cm\n");
-  if (distance < 3)
+  if (distance < 8)
   {
-    servo.writeMicroseconds(SERVO_UP);
-    chassis.driveFor(-10, 90, true);
+    chassis.driveFor(-1, 30, true);
+    moveArmUp();
+    chassis.driveFor(-1, 90, true);
     turn(180, 180);
   }
   else
   {
-    servo.writeMicroseconds(SERVO_DOWN);
     chassis.driveFor(1, 30, true);
   }
+}
+
+void dynamicTurnL(float ang, float speed)
+{
+  Serial1.println(robotState);
+  int i = 0;
+  chassis.turnFor(ang - 45, speed, true);
+  delay(5);
+  qtr.read(sensorValues);
+  while (sensorValues[2] < 600 && sensorValues[3] < 600)
+  {
+    chassis.turnFor(ang - 45 + i, speed, false);
+    // delay(1);
+    i += 2;
+    qtr.read(sensorValues);
+    debug("LEFT: ");
+    for (uint8_t i = 0; i < SensorCount; i++)
+    {
+      debug(sensorValues[i]);
+      debug('\t');
+    }
+    debugln();
+  }
+  chassis.driveFor(1, 90, true);
+  i = 0;
+  robotState = ROBOT_FOLLOW;
+}
+
+void dynamicTurnR(float ang, float speed)
+{
+  Serial1.println(robotState);
+  int i = 0;
+  chassis.turnFor(ang + 45, speed, true);
+  delay(5);
+  qtr.read(sensorValues);
+
+  uint16_t meanR = (sensorValues[0] + sensorValues[1]) / 2;
+  uint16_t meanL = (sensorValues[4] + sensorValues[5]) / 2;
+
+  while (sensorValues[2] < meanR && sensorValues[3] < meanL)
+  {
+    qtr.read(sensorValues);
+    chassis.turnFor(45 + ang + i, speed, false);
+    // delay(1);
+    i -= 2;
+    debug("RIGHT: ");
+    for (uint8_t i = 0; i < SensorCount; i++)
+    {
+      debug(sensorValues[i]);
+      debug('\t');
+    }
+    debugln();
+  }
+
+  chassis.driveFor(1, 90, true);
+  i = 0;
+  robotState = ROBOT_FOLLOW;
+}
+
+void dynamicTurn(float ang, float speed)
+{
+  Serial1.println(robotState);
+  // qtr.read(sensorValues);
+  int i = 0;
+
+  if (ang < 0)
+  {
+    chassis.turnFor(ang, speed, true);
+    qtr.read(sensorValues);
+    while (sensorValues[2] < CENTER_RIGHT && sensorValues[3] < CENTER_LEFT)
+    {
+      qtr.read(sensorValues);
+      chassis.turnFor(ang + i, speed, false);
+      // delay(1);
+      i--;
+      debug("RIGHT: ");
+      for (uint8_t i = 0; i < SensorCount; i++)
+      {
+        debug(sensorValues[i]);
+        debug('\t');
+      }
+      debugln();
+    }
+  }
+  else
+  {
+    chassis.turnFor(ang, speed, true);
+    // delay(10);
+    qtr.read(sensorValues);
+    // while (sensorValues[1] < CENTER_RIGHT && sensorValues[2] < CENTER_LEFT)
+    while (sensorValues[2] < CENTER_RIGHT && sensorValues[3] < CENTER_LEFT)
+    {
+      chassis.turnFor(ang + i, speed, false);
+      // delay(1);
+      i++;
+      qtr.read(sensorValues);
+      debug("LEFT: ");
+      for (uint8_t i = 0; i < SensorCount; i++)
+      {
+        debug(sensorValues[i]);
+        debug('\t');
+      }
+      debugln();
+    }
+  }
+
+  // chassis.idle();
+  chassis.driveFor(1, 90, true);
+  i = 0;
+  robotState = ROBOT_FOLLOW;
 }
 
 void handleTurnEvent(Directions route[], int n)
@@ -143,16 +347,21 @@ void handleTurnEvent(Directions route[], int n)
   static uint16_t InterCount = 0;
   static uint8_t RouteCount = 0;
 
-  debugln("ROBOT STATE: TURNING");
-  debugln("\nInterCount: ");
-  debugln(InterCount);
+  // debugln("ROBOT STATE: TURNING");
+  // Serial1.println(robotState);
+  //  debugln("\nInterCount: ");
+  //  debugln(InterCount);
+
   if (RouteCount < n)
   {
     debugln(route[RouteCount].turnSequence[InterCount]);
     switch (route[RouteCount].turnSequence[InterCount])
     {
     case 'T': // Turn around
-      turn(180, 360);
+      // dynamicTurnL(180, 360);
+      // turn(180, 360);
+      dynamicTurn(180, 360);
+      Serial1.println(robotState);
       InterCount++;
       break;
     case 'S':
@@ -160,49 +369,72 @@ void handleTurnEvent(Directions route[], int n)
       InterCount++;
       break;
     case 'R': // Turn right
-      chassis.driveFor(5.5, 90, true);
-      turn(-92, 180);
+      chassis.driveFor(6, 180, true);
+      // dynamicTurnR(-90, 180);
+      // turn(-90, 180);
+      dynamicTurn(-90, 180);
+      Serial1.println(robotState);
       InterCount++;
       break;
     case 'L': // Turn left
-      chassis.driveFor(5.5, 90, true);
-      turn(92, 180);
+      chassis.driveFor(6, 180, true);
+      // dynamicTurnL(90, 180);
+      // turn(90, 180);
+      dynamicTurn(90, 180);
+      Serial1.println(robotState);
       InterCount++;
       break;
     case 'D': // drop off sequence
       // Transition to a different State temporarily
       robotState = ROBOT_DELIVERY;
+      // chassis.idle();
+      // Serial1.println(robotState);
+      handleDelivery(route[RouteCount].height);
+
       InterCount++;
       break;
     case 'P': // pick up off sequence
       // Transition to a different State temporarily
       robotState = ROBOT_PICKUP;
+      // chassis.driveFor(-1, 30, true);
+      Serial1.println(robotState);
       InterCount++;
       break;
     case 'E':
-      servo.writeMicroseconds(SERVO_DOWN);
-      chassis.turnFor(-180, 360, true);
+      // servo.writeMicroseconds(SERVO_DOWN);
+      dynamicTurn(-180, 360);
+      // robotState = ROBOT_TURNING;
+
+      // chassis.turnFor(-180, 360, true);
       chassis.driveFor(1, 90, true);
       motors.setSpeeds(0, 0);
       InterCount = 0;
       RouteCount++;
       if (RouteCount < n)
+      {
         robotState = ROBOT_FOLLOW;
+        Serial1.println(robotState);
+      }
       else
       {
         RouteCount = 0;
         robotState = ROBOT_ORDERS;
+        Serial1.println(robotState);
       }
       break;
     default:
       break;
     }
   }
-  // else
-  // {
-  //   robotState = ROBOT_ORDERS;
-  //   RouteCount = 0;
-  // }
+}
+
+void checkIntersectionEventV1(uint16_t meanR, uint16_t meanL)
+{
+  if ((meanL > MEAN_LEFT) && (meanR > MEAN_RIGHT))
+  {
+    chassis.idle();
+    robotState = ROBOT_TURNING;
+  }
 }
 
 // Eventually change this into array of structures
@@ -248,7 +480,8 @@ void pathSequence(char Des[], int n)
     }
   }
 }
-void handleButton(int16_t keyPress)
+
+uint8_t handleButton(int16_t keyPress)
 {
   debugln("Key: " + String(keyPress));
   static char route[3] = {r1, r2, r3};
@@ -273,49 +506,104 @@ void handleButton(int16_t keyPress)
       break;
     }
   }
+  return numDest;
 }
 
-uint8_t pathSequenceUART(char Des[])
+uint8_t pathSequenceUART(char Des[], Directions *routes)
 {
+
+  debugln(Des);
   int n = Des[0] - '0';
   if (n > numDest)
     n = numDest;
 
-  for (int i = 1, j = 0; i < n + 1; i++, j++)
+  if (isDigit(Des[0]) && n > 0)
   {
-    switch (Des[i])
+    robotState = ROBOT_FOLLOW;
+
+    int j = 0;
+    for (int i = 1; i < n + 1; i++)
     {
-    case 't':
-      ROUTE[j] = TestRoute;
-      debugln("ROUTE T WAS MARKED");
-      break;
-    case 'a':
-      ROUTE[j] = ARoute;
-      debugln("ROUTE A WAS MARKED");
-      break;
-    case 'b':
-      ROUTE[j] = BRoute;
-      debugln("ROUTE B WAS MARKED");
-      break;
-    case 'c':
-      ROUTE[j] = CRoute;
-      debugln("ROUTE C WAS MARKED");
-      break;
-    case 'd':
-      ROUTE[j] = DRoute;
-      debugln("ROUTE D WAS MARKED");
-      break;
-    // Add other cases
-    default:
-      break;
+      // debugln(Des[i]);
+      //  debugln(Des[i + n]);
+      switch (Des[i])
+      {
+      case 't':
+        routes[j] = TestRoute;
+        routes[j].height = Des[i + n] - '0';
+        debugln("ROUTE T WAS MARKED");
+        debugln(routes[j].height);
+        break;
+      case 'a':
+        routes[j] = ARoute;
+        routes[j].height = Des[i + n] - '0';
+        debugln("ROUTE A WAS MARKED");
+        debugln(routes[j].height);
+        break;
+      case 'b':
+        routes[j] = BRoute;
+        routes[j].height = Des[i + n] - '0';
+        debugln("ROUTE B WAS MARKED");
+        debugln(routes[j].height);
+        break;
+      case 'c':
+        routes[j] = CRoute;
+        routes[j].height = Des[i + n] - '0';
+        debugln("ROUTE C WAS MARKED");
+        debugln(routes[j].height);
+        break;
+      case 'd':
+        routes[j] = DRoute;
+        routes[j].height = Des[i + n] - '0';
+        debugln("ROUTE D WAS MARKED");
+        debugln(routes[j].height);
+        break;
+      case 'e':
+        routes[j] = ERoute;
+        routes[j].height = Des[i + n] - '0';
+        debugln("ROUTE E WAS MARKED");
+        debugln(routes[j].height);
+        break;
+      case 'f':
+        routes[j] = FRoute;
+        routes[j].height = Des[i + n] - '0';
+        debugln("ROUTE F WAS MARKED");
+        debugln(routes[j].height);
+        break;
+      case 'g':
+        routes[j] = GRoute;
+        routes[j].height = Des[i + n] - '0';
+        debugln("ROUTE G WAS MARKED");
+        debugln(routes[j].height);
+        break;
+      case 'h':
+        routes[j] = HRoute;
+        routes[j].height = Des[i + n] - '0';
+        debugln("ROUTE H WAS MARKED");
+        debugln(routes[j].height);
+        break;
+      case 'i':
+        routes[j] = IRoute;
+        routes[j].height = Des[i + n] - '0';
+        debugln("ROUTE I WAS MARKED");
+        debugln(routes[j].height);
+        break;
+      // Add other cases
+      default:
+        break;
+      }
+
+      j++;
     }
   }
+
+  // Serial.println(Des);
   return n;
 }
 
 uint8_t handleUARTCOM(void)
 {
-  uint8_t routeCount;
+  uint8_t routeCount = 0;
   while (Serial1.available() > 0)
   {
     static char MESSAGE[MAX_MESSAGE_LENGTH];
@@ -331,9 +619,8 @@ uint8_t handleUARTCOM(void)
     {
       MESSAGE[pos] = '\0';
       pos = 0;
-      Serial.println(MESSAGE);
-      routeCount = pathSequenceUART(MESSAGE);
-      robotState = ROBOT_FOLLOW;
+      // debugln(MESSAGE);
+      routeCount = pathSequenceUART(MESSAGE, ROUTE);
     }
   }
 
@@ -344,16 +631,20 @@ void setup()
 {
   // put your setup code here, to run once:
   Serial.begin(115200);
-  Serial1.begin(9600);
-
-  // s.begin(9600);
+  Serial1.begin(57600);
+  pinMode(13, OUTPUT);
+  digitalWrite(13, LOW);
+  delay(100);
+  digitalWrite(13, HIGH);
 
   // Initialize Chasis
   chassis.init();
 
   // Initialize QTR sensor
   qtr.setTypeAnalog();
+
   qtr.setSensorPins((const uint8_t[]){A7, A2, A3, A4, A0, A11}, SensorCount);
+  // qtr.setSensorPins((const uint8_t[]){A7, A3, A4, A11}, SensorCount);
 
   // RangeFinder Init
   rangefinder.init();
@@ -370,30 +661,52 @@ void setup()
 void loop()
 {
   static uint16_t cPressedCount = 0b0;
-  uint8_t routeCount = numDest;
+
   // int16_t keyPress = decoder.getKeyCode();
   if (buttonA.getSingleDebouncedPress())
   {
+    Serial1.println(robotState);
+    qtr.resetCalibration();
+
     debugln("ROBOT STATE: UNCALIBRATED");
     ledRed(1);
     calibration();
+    Serial1.println(robotState);
   }
+  else if (Serial1.available())
+  {
+    if ((robotState == ROBOT_CALIBRATED || robotState == ROBOT_ORDERS))
+      routeCount = handleUARTCOM();
+  }
+
   else if (buttonB.getSingleDebouncedPress())
   {
     servo.writeMicroseconds(SERVO_DOWN);
     cPressedCount ^= 0b1;
-    handleButton(cPressedCount);
-  }
-  else if ((robotState == ROBOT_CALIBRATED || robotState == ROBOT_ORDERS) && Serial1.available())
-  {
-    routeCount = handleUARTCOM();
+    routeCount = handleButton(cPressedCount);
   }
 
   static float distance;
   switch (robotState)
   {
   case ROBOT_FOLLOW:
-    lineFollowingHandler();
+
+    distance = rangefinder.getDistance();
+
+    debug("Distance: ");
+    debug(distance); // return curent distance in serial
+    debug("\t\t");
+
+    if (distance < 25)
+    {
+      lineFollowingHandlerV1(100, false, distance);
+    }
+    else
+    {
+      lineFollowingHandlerV1(BASE_SPEED, true, distance);
+      // lineFollowingHandler();
+    }
+
     break;
   case ROBOT_TURNING:
     chassis.idle();
@@ -407,7 +720,7 @@ void loop()
     handlePickUP(distance);
     break;
   case ROBOT_DELIVERY:
-    handleDelivery();
+    chassis.idle();
     break;
   default:
     break;
@@ -416,6 +729,8 @@ void loop()
 
 void calibration()
 {
+  MEAN_RIGHT = 0;
+  MEAN_LEFT = 0;
   debugln("CALIBRATING: Please Wait...");
   for (uint16_t i = 0; i < 200; i++)
   {
@@ -430,26 +745,65 @@ void calibration()
   debugln();
 
   // print the calibration maximum values measured when emitters were on
-  for (uint8_t i = 0; i < SensorCount; i++)
+  for (uint8_t i = 0, j = SensorCount - 1; i < SensorCount / 2; i++, j--)
   {
     debug(qtr.calibrationOn.maximum[i]);
+    MEAN_RIGHT += qtr.calibrationOn.maximum[i];
+    MEAN_LEFT += qtr.calibrationOn.maximum[j];
     debug(' ');
   }
+  for (uint8_t i = SensorCount / 2; i < SensorCount; i++)
+  {
+    debug(qtr.calibrationOn.maximum[i]);
+    // MEAN_LEFT += qtr.calibrationOn.maximum[i];
+    debug(' ');
+  }
+
+  CENTER_RIGHT = qtr.calibrationOn.maximum[(SensorCount / 2 - 1)];
+  CENTER_LEFT = qtr.calibrationOn.maximum[SensorCount / 2];
+
+  CENTER_RIGHT = CENTER_RIGHT - ((float)CENTER_RIGHT * CenterSens);
+  CENTER_LEFT = CENTER_LEFT - ((float)CENTER_LEFT * CenterSens);
+
+  debug("\nCENTER_R: ");
+  debugln(CENTER_RIGHT);
+  debug("CENTER_L: ");
+  debugln(CENTER_LEFT);
+
+  // MEAN_RIGHT /= 3;
+  // MEAN_LEFT /= 3;
+  debug("\nMEAN_R: ");
+  debugln(MEAN_RIGHT);
+  debug("MEAN_L: ");
+  debugln(MEAN_LEFT);
+
+  MEAN_RIGHT = MEAN_RIGHT - ((float)MEAN_RIGHT * InterSens);
+  MEAN_LEFT = MEAN_LEFT - ((float)MEAN_LEFT * InterSens);
+
+  debugln("\nAdjusted with sensitivity: ");
+  debug(InterSens);
+  debug("\nMEAN_R: ");
+  debugln(MEAN_RIGHT);
+  debug("MEAN_L: ");
+  debugln(MEAN_LEFT);
   robotState = ROBOT_CALIBRATED;
   debugln("\nROBOT STATE: CALIBRATED");
+
   ledRed(0);
   ledGreen(1);
 }
+
 void inline TurnEffort(int16_t *lastError, float *turnEffort)
 {
   int position = qtr.readLineBlack(sensorValues);
-  int16_t error = position - 2500;
-
-  // I = I + error;
-  // if (I > 10000)
-  //   I = 10000;
+  // int16_t error = position - 2500;
+  int16_t error = position - 1500;
+  static int I = 0;
+  I += error;
+  if (I > 10000)
+    I = 0;
   // float turnEffort = (kp * error) + (ki * I) + (kd * (error - lastError));
-  float tempTurnEffort = (kp * error) + (kd * (error - (*lastError)));
+  float tempTurnEffort = (kp * error) + (ki * I) + (kd * (error - (*lastError)));
 
   *lastError = error;
   *turnEffort = tempTurnEffort;
@@ -461,13 +815,17 @@ void inline SpeedIncrementFUNC(int16_t *sIncrement, int16_t *samples, int16_t *s
   int16_t tempS1 = *samples1;
   qtr.read(sensorValues);
 
-  checkIntersectionEvent((sensorValues[0] + sensorValues[1] + sensorValues[2]), (sensorValues[3] + sensorValues[4] + sensorValues[5]));
+  // checkIntersectionEvent((sensorValues[0] + sensorValues[1] + sensorValues[2]), (sensorValues[3] + sensorValues[4] + sensorValues[5]));
+  checkIntersectionEventV1((sensorValues[0] + sensorValues[1] + sensorValues[2]), (sensorValues[3] + sensorValues[4] + sensorValues[5]));
+
+  // checkIntersectionEventV1((sensorValues[0] + sensorValues[1]), (sensorValues[3] + sensorValues[4]));
   for (uint8_t i = 0; i < SensorCount; i++)
   {
     debug(sensorValues[i]);
     debug('\t');
   }
 
+  // if ((sensorValues[1] > (sensorValues[0])) || (sensorValues[2] > (sensorValues[4])))
   if ((sensorValues[2] > (sensorValues[0] + sensorValues[1])) || (sensorValues[3] > (sensorValues[4] + sensorValues[5])))
   {
     tempS++;
@@ -508,24 +866,53 @@ void inline motorSpeedLimitBound(int16_t *m1, int16_t *m2)
   if (*m2 > MAX_SPEED)
     *m2 = MAX_SPEED;
 }
-void inline lineFollowingHandler(void)
+
+void inline lineFollowingHandlerV1(uint16_t baseSpeed, bool acceleration, float distance)
 {
   float turnEffort = 0;
   static int16_t sIncrement = 0;
   static int16_t samples = 0;
   static int16_t samples1 = 0;
-
   static int16_t lastError = 0;
 
   // Final Motor Speeds
   int16_t m1Speed;
   int16_t m2Speed;
 
-  TurnEffort(&lastError, &turnEffort);
-  SpeedIncrementFUNC(&sIncrement, &samples, &samples1);
+  if (acceleration)
+  {
+    SpeedIncrementFUNC(&sIncrement, &samples, &samples1);
+    TurnEffort(&lastError, &turnEffort);
+  }
+  else
+  {
+    SpeedIncrementFUNC(&sIncrement, &samples, &samples1);
+    // qtr.read(sensorValues);
+    const int16_t MAX_DISTANCE = 25;
+    // const int16_t STOP_DISTANCE = 1;
+    // const float DISTANCE_FACTOR = MAX_DISTANCE / 1000;
+    // const float MOTOR_FACTOR = baseSpeed / 1000;
 
-  m1Speed = (BASE_SPEED + sIncrement) - turnEffort;
-  m2Speed = (BASE_SPEED + sIncrement) + turnEffort;
+    TurnEffort(&lastError, &turnEffort);
+    sIncrement = 0;
+    float magnitude = (float)(MAX_DISTANCE - distance) / (float)MAX_DISTANCE;
+    float cruiseRate = magnitude * (float)baseSpeed;
+    // Serial.println(cruiseRate);
+
+    if (cruiseRate > baseSpeed)
+    {
+      m1Speed = (MIN_SPEED)-turnEffort;
+      m2Speed = (MIN_SPEED) + turnEffort;
+    }
+    else
+    {
+      m1Speed = (int)(baseSpeed - cruiseRate) - turnEffort;
+      m2Speed = (int)(baseSpeed - cruiseRate) + turnEffort;
+    }
+  }
+
+  m1Speed = (baseSpeed + sIncrement) - turnEffort;
+  m2Speed = (baseSpeed + sIncrement) + turnEffort;
 
   debug("Error: ");
   debug(lastError);
