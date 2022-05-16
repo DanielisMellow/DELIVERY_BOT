@@ -1,8 +1,7 @@
 # DELIVERY_BOT
-
 Delivery Bot is a package delivering robot that is built on the Romi chassis. 
 
-**Overview:** 
+##Overview 
 The project's core is a line-following robot with object detection used to make specific deliveries on a track. The Romi 32U4 handles the low-level operations of the robot and communicates with an ESP32 over UART. The ESP32 is used to host a web server using web sockets. The webserver serves as the GUI and displays the status of the robot in real-time. 
 
 **Functional Decompostion:** 
